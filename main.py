@@ -60,7 +60,7 @@ def solve_size(size, requirements, stock, kerf):
     solver = pywraplp.Solver.CreateSolver("SCIP") or pywraplp.Solver.CreateSolver("CBC")
     x = [solver.IntVar(0, solver.infinity(), f"p{i}") for i in range(len(pats))]
     for j, qty in enumerate(demand):
-        solver.Add(sum(pats[i][j] * x[i] for i in range(len(pats))) >= qty)
+        solver.Add(sum(pats[i][j] * x[i] for i in range(len(pats))) == qty)
     solver.Minimize(sum(x))
     solver.SetTimeLimit(30000)
     status = solver.Solve()
