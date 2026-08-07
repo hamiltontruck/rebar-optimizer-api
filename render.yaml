@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: adil-rebar-optimizer-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
