@@ -138,7 +138,7 @@ def solve_size(size, requirements, stock, kerf):
 
 @app.get("/")
 def health():
-    return {"ok": True, "service": "Adil Rebar Optimizer API", "optimizer": "minimum-bars-v2"}
+    return {"ok": True, "service": "Adil Rebar Optimizer API", "optimizer": "column-generation-v3"}
 
 
 @app.post("/optimize")
