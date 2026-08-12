@@ -60,12 +60,25 @@ def solve_size(size, requirements, stock, kerf):
     solver = pywraplp.Solver.CreateSolver("SCIP") or pywraplp.Solver.CreateSolver("CBC")
     x = [solver.IntVar(0, solver.infinity(), f"p{i}") for i in range(len(pats))]
     for j, qty in enumerate(demand):
-        solver.Add(sum(pats[i][j] * x[i] for i in range(len(pats))) == qty)
-    solver.Minimize(sum(x))
+        solver.Add(sum(pats[i][j] * x[i] for i in range(len(pats))) >= qty)
+
+    # Stage 1: minimize purchased stock bars, matching the Excel/Python engine.
+    total_bars = sum(x)
+    solver.Minimize(total_bars)
     solver.SetTimeLimit(30000)
     status = solver.Solve()
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
         raise HTTPException(500, f"Optimization failed for {size} mm")
+
+    # Stage 2: keep the minimum bar count and minimize surplus cuts.
+    best_bars = int(round(sum(v.solution_value() for v in x)))
+    solver.Add(total_bars == best_bars)
+    produced_pieces = sum(sum(pat) * x[i] for i, pat in enumerate(pats))
+    solver.Minimize(produced_pieces)
+    solver.SetTimeLimit(30000)
+    second_status = solver.Solve()
+    if second_status in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
+        status = second_status
     result = []
     for i, pat in enumerate(pats):
         count = int(round(x[i].solution_value()))
