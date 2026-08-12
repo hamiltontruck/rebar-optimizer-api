@@ -54,31 +54,79 @@ def patterns(lengths, stock, kerf, limit=10000):
 def solve_size(size, requirements, stock, kerf):
     lengths = sorted(requirements, reverse=True)
     demand = [requirements[x] for x in lengths]
-    pats = patterns(lengths, stock, kerf)
-    if not pats:
-        raise HTTPException(400, f"No feasible cuts for {size} mm")
+    scale = 1000
+    capacity = int(round(stock * scale))
+    weights = [int(round((length + kerf) * scale)) for length in lengths]
+    # Every bar gets one kerf allowance back because only gaps between cuts use kerf.
+    priced_capacity = capacity + int(round(kerf * scale))
+
+    # Start with homogeneous patterns so every demand is covered.
+    pats = []
+    for j, weight in enumerate(weights):
+        pat = [0] * len(lengths)
+        pat[j] = max(1, priced_capacity // weight)
+        pats.append(tuple(pat))
+
+    # Gilmore-Gomory column generation: LP dual prices a new knapsack pattern.
+    for _ in range(500):
+        lp = pywraplp.Solver.CreateSolver("GLOP")
+        variables = [lp.NumVar(0, lp.infinity(), f"p{i}") for i in range(len(pats))]
+        constraints = []
+        for j, qty in enumerate(demand):
+            constraints.append(lp.Add(sum(pats[i][j] * variables[i] for i in range(len(pats))) >= qty))
+        lp.Minimize(sum(variables))
+        if lp.Solve() != pywraplp.Solver.OPTIMAL:
+            break
+        dual = [c.dual_value() for c in constraints]
+
+        best = [0.0] * (priced_capacity + 1)
+        choice = [-1] * (priced_capacity + 1)
+        for used in range(1, priced_capacity + 1):
+            value, selected = best[used - 1], -1
+            for j, weight in enumerate(weights):
+                if weight <= used:
+                    candidate = best[used - weight] + dual[j]
+                    if candidate > value + 1e-10:
+                        value, selected = candidate, j
+            best[used], choice[used] = value, selected
+
+        used = max(range(priced_capacity + 1), key=lambda c: best[c])
+        if best[used] <= 1.000001:
+            break
+        pat = [0] * len(lengths)
+        while used > 0 and choice[used] >= 0:
+            j = choice[used]
+            pat[j] += 1
+            used -= weights[j]
+        pat = tuple(pat)
+        if not any(pat) or pat in pats:
+            break
+        pats.append(pat)
+
+    # Solve the integer master problem over generated cutting patterns.
     solver = pywraplp.Solver.CreateSolver("SCIP") or pywraplp.Solver.CreateSolver("CBC")
     x = [solver.IntVar(0, solver.infinity(), f"p{i}") for i in range(len(pats))]
     for j, qty in enumerate(demand):
         solver.Add(sum(pats[i][j] * x[i] for i in range(len(pats))) >= qty)
-
-    # Stage 1: minimize purchased stock bars, matching the Excel/Python engine.
     total_bars = sum(x)
     solver.Minimize(total_bars)
-    solver.SetTimeLimit(30000)
+    solver.SetTimeLimit(60000)
     status = solver.Solve()
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
         raise HTTPException(500, f"Optimization failed for {size} mm")
 
-    # Stage 2: keep the minimum bar count and minimize surplus cuts.
     best_bars = int(round(sum(v.solution_value() for v in x)))
     solver.Add(total_bars == best_bars)
-    produced_pieces = sum(sum(pat) * x[i] for i, pat in enumerate(pats))
-    solver.Minimize(produced_pieces)
+    surplus = sum(
+        sum(pats[i][j] * x[i] for i in range(len(pats))) - demand[j]
+        for j in range(len(lengths))
+    )
+    solver.Minimize(surplus)
     solver.SetTimeLimit(30000)
     second_status = solver.Solve()
     if second_status in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
         status = second_status
+
     result = []
     for i, pat in enumerate(pats):
         count = int(round(x[i].solution_value()))
@@ -87,7 +135,6 @@ def solve_size(size, requirements, stock, kerf):
             used = sum(cuts) + max(0, len(cuts) - 1) * kerf
             result.append({"size": size, "stock": stock, "cuts": cuts, "waste": round(stock-used, 6), "count": count})
     return result, "OPTIMAL" if status == pywraplp.Solver.OPTIMAL else "FEASIBLE"
-
 
 @app.get("/")
 def health():
